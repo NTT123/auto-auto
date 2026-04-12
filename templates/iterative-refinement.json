@@ -1,0 +1,51 @@
+{
+  "name": "iterative-refinement",
+  "description": "Plan-Execute-Verify-Reflect loop. Best for tasks where requirements are clear but the solution needs iterative improvement. Most common workflow.",
+  "when_to_use": "Feature implementation, refactoring, bug fixes with known scope, writing tasks, building tools",
+  "pattern": "iterative-refinement",
+  "initial_state": "plan",
+  "states": {
+    "plan": {
+      "instruction": "Analyze the goal and create a detailed plan.\n\n1. Break the goal into concrete, actionable tasks using wf_task(action='create', ...)\n2. Each task should be small enough to complete and verify independently\n3. Consider dependencies between tasks\n4. Identify risks or unknowns that might need research\n\nWhen your plan is complete (all tasks defined), transition to 'execute'.",
+      "transitions": {
+        "execute": {
+          "requires": ["all_tasks_defined"]
+        },
+        "reflect": {}
+      }
+    },
+    "execute": {
+      "instruction": "Implement the plan step by step.\n\n1. Pick the next pending task: wf_task(action='list', status='pending')\n2. Mark it in-progress: wf_task(action='update', task_id='...', status='in_progress')\n3. Do the work\n4. Mark it done: wf_task(action='done', task_id='...')\n5. Repeat until all tasks are done\n\nIf you discover issues, use wf_reflect() to log them.\nWhen all tasks are done, transition to 'verify'.",
+      "transitions": {
+        "verify": {
+          "requires": ["all_tasks_done"]
+        },
+        "reflect": {},
+        "plan": {}
+      }
+    },
+    "verify": {
+      "instruction": "Verify all changes using the verification plan.\n\n1. Call wf_verify() FIRST to get the full verification plan and pending checks\n2. Work through each pending check in order:\n   a. Execute the check as described in the 'how' field\n   b. If a 'command' is provided, run it\n   c. If 'files_to_check' are listed, inspect them\n   d. Record the result: wf_gate(criteria='...', passed=True/False, evidence='...')\n3. After each gate, call wf_verify() again to see remaining checks\n4. Be HONEST. Failed checks catch real issues — don't rubber-stamp.\n\nIf all checks pass → transition to 'done'.\nIf any fail → go to 'reflect' or 'execute' to fix, then come back.",
+      "transitions": {
+        "done": {
+          "requires": ["gate_passed"]
+        },
+        "reflect": {},
+        "execute": {},
+        "plan": {}
+      }
+    },
+    "reflect": {
+      "instruction": "Step back and reflect on what happened.\n\n1. What worked well?\n2. What didn't work or was harder than expected?\n3. What would you do differently?\n4. What's the most important thing to do next?\n\nLog your reflection with wf_reflect(content='...').\nThen decide: go back to 'plan' (need to re-plan), 'execute' (just fix something), or 'done' (actually we're fine).",
+      "transitions": {
+        "plan": {},
+        "execute": {},
+        "done": {}
+      }
+    },
+    "done": {
+      "instruction": "Workflow complete. Summarize what was accomplished, any remaining issues, and what the user should know.",
+      "transitions": {}
+    }
+  }
+}

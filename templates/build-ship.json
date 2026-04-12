@@ -1,0 +1,70 @@
+{
+  "name": "build-ship",
+  "description": "Spec → Design → Implement → Test → Deploy. Full software development lifecycle from requirements to shipping.",
+  "when_to_use": "New projects, features with clear requirements, deliverables with stakeholders, production deployments",
+  "pattern": "build-ship",
+  "initial_state": "spec",
+  "states": {
+    "spec": {
+      "instruction": "Define what we're building and why.\n\n1. Write clear requirements / acceptance criteria\n2. Define scope — what's in, what's out\n3. Identify constraints (tech stack, timeline, dependencies)\n4. Create spec tasks: wf_task(action='create', ...)\n5. Document the spec with wf_reflect()\n\nTransition to 'design' when spec is complete.",
+      "transitions": {
+        "design": {
+          "requires": ["all_tasks_done", "has_reflection"]
+        }
+      }
+    },
+    "design": {
+      "instruction": "Design the solution before implementing.\n\n1. Choose architecture / approach\n2. Design interfaces, data models, API contracts\n3. Identify components and how they interact\n4. Create tasks for each design decision: wf_task(action='create', ...)\n5. Document design with wf_reflect()\n\nTransition to 'implement' when design is solid.",
+      "transitions": {
+        "implement": {
+          "requires": ["all_tasks_done", "has_reflection"]
+        },
+        "spec": {}
+      }
+    },
+    "implement": {
+      "instruction": "Build it.\n\n1. Create implementation tasks from the design: wf_task(action='create', ...)\n2. Implement in order of dependencies\n3. Write tests as you go, not after\n4. Keep changes small and focused\n5. If design needs to change, go back to 'design'\n\nTransition to 'test' when implementation is complete.",
+      "transitions": {
+        "test": {
+          "requires": ["all_tasks_done"]
+        },
+        "design": {},
+        "reflect": {}
+      }
+    },
+    "test": {
+      "instruction": "Thorough testing and quality assurance.\n\n1. Call wf_verify() FIRST to get the verification plan\n2. Work through each pending check:\n   - Run automated tests (commands from verification plan)\n   - Inspect output files if listed\n   - Check browser rendering if applicable\n3. Record each: wf_gate(criteria='...', passed=..., evidence='...')\n4. Check against acceptance criteria from spec\n\nIf all checks pass, transition to 'deploy'.\nIf not, fix issues and re-test.",
+      "transitions": {
+        "deploy": {
+          "requires": ["gate_passed"]
+        },
+        "implement": {},
+        "reflect": {}
+      }
+    },
+    "deploy": {
+      "instruction": "Ship it.\n\n1. Create deployment tasks: wf_task(action='create', ...)\n2. Final pre-deploy checks\n3. Deploy / deliver\n4. Verify in production / final environment\n5. Record: wf_gate(criteria='Deployed successfully', ...)\n\nTransition to 'done' when deployed and verified.",
+      "transitions": {
+        "done": {
+          "requires": ["all_tasks_done", "gate_passed"]
+        },
+        "test": {},
+        "reflect": {}
+      }
+    },
+    "reflect": {
+      "instruction": "Step back and think about the process.\n\nLog reflections and decide where to continue.",
+      "transitions": {
+        "spec": {},
+        "design": {},
+        "implement": {},
+        "test": {},
+        "done": {}
+      }
+    },
+    "done": {
+      "instruction": "Shipped. Summarize: what was built, how to use it, known limitations, and follow-up items.",
+      "transitions": {}
+    }
+  }
+}

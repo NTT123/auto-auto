@@ -1,0 +1,68 @@
+{
+  "name": "top-down-decomposition",
+  "description": "Analyze → Decompose → Prioritize → Execute → Verify. Best for large, complex tasks that need systematic breakdown before work begins.",
+  "when_to_use": "Large features, system design, multi-component changes, projects with many unknowns, architectural decisions",
+  "pattern": "top-down-decomposition",
+  "initial_state": "analyze",
+  "states": {
+    "analyze": {
+      "instruction": "Deeply analyze the problem before doing anything.\n\n1. Understand the full scope — what exactly needs to happen?\n2. Identify all the components, systems, and files involved\n3. Map dependencies between components\n4. Identify risks, unknowns, and things that need research\n5. Document your analysis with wf_reflect()\n\nDon't start coding yet. Understanding comes first.\nWhen you have a clear picture, transition to 'decompose'.",
+      "transitions": {
+        "decompose": {
+          "requires": ["has_reflection"]
+        }
+      }
+    },
+    "decompose": {
+      "instruction": "Break the problem into independent work units.\n\n1. Create top-level tasks for each major component: wf_task(action='create', ...)\n2. Break each into subtasks: wf_task(action='create', parent_id='...', ...)\n3. Each leaf task should be completable in one focused session\n4. Identify which tasks can be done in parallel vs. sequentially\n\nTransition to 'prioritize' when decomposition is complete.",
+      "transitions": {
+        "prioritize": {
+          "requires": ["all_tasks_defined"]
+        },
+        "analyze": {}
+      }
+    },
+    "prioritize": {
+      "instruction": "Order the work for maximum effectiveness.\n\n1. Identify the critical path — what blocks everything else?\n2. Start with high-risk items (reduce uncertainty early)\n3. Group related tasks that benefit from shared context\n4. Log your prioritization reasoning with wf_reflect()\n\nTransition to 'execute' when priorities are clear.",
+      "transitions": {
+        "execute": {
+          "requires": ["has_reflection"]
+        },
+        "decompose": {}
+      }
+    },
+    "execute": {
+      "instruction": "Work through tasks in priority order.\n\n1. Pick the highest-priority pending task\n2. Mark it in-progress, do the work, mark it done\n3. After completing a batch of related tasks, consider verifying early\n4. If you discover the decomposition was wrong, go back to 'decompose'\n\nWhen all tasks are done, transition to 'verify'.",
+      "transitions": {
+        "verify": {
+          "requires": ["all_tasks_done"]
+        },
+        "decompose": {},
+        "reflect": {}
+      }
+    },
+    "verify": {
+      "instruction": "Verify the complete solution works end-to-end.\n\n1. Call wf_verify() FIRST to get the verification plan\n2. Work through each pending check — run commands, inspect files, check browser\n3. Record each result with wf_gate(criteria, passed, evidence)\n4. Be thorough: test individual components AND their integration\n\nIf issues found, go to 'reflect' then back to 'execute' to fix.",
+      "transitions": {
+        "done": {
+          "requires": ["gate_passed"]
+        },
+        "reflect": {},
+        "execute": {}
+      }
+    },
+    "reflect": {
+      "instruction": "Reflect on progress and adjust approach.\n\n1. What's working about the decomposition?\n2. Do any tasks need to be re-scoped or split further?\n3. Are priorities still correct?\n\nLog reflection and decide where to go next.",
+      "transitions": {
+        "analyze": {},
+        "decompose": {},
+        "execute": {},
+        "done": {}
+      }
+    },
+    "done": {
+      "instruction": "Project complete. Provide a comprehensive summary of what was built, how components connect, and any known limitations.",
+      "transitions": {}
+    }
+  }
+}

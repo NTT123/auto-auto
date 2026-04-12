@@ -1,0 +1,58 @@
+{
+  "name": "debug-fix",
+  "description": "Reproduce → Diagnose → Hypothesize → Fix → Verify. Structured debugging workflow that prevents jumping to conclusions.",
+  "when_to_use": "Bug fixes, debugging, troubleshooting, performance issues, flaky tests",
+  "pattern": "debug-fix",
+  "initial_state": "reproduce",
+  "states": {
+    "reproduce": {
+      "instruction": "Reproduce the problem reliably BEFORE trying to fix it.\n\n1. Understand the reported symptoms\n2. Find the minimal steps to reproduce\n3. Create a task for the reproduction: wf_task(action='create', name='Reproduce: ...')\n4. Run the reproduction and confirm you see the bug\n5. Mark the task done when you can reliably trigger the issue\n\nDo NOT skip this. Fixing without reproducing leads to wrong fixes.\nTransition to 'diagnose' once you can reproduce.",
+      "transitions": {
+        "diagnose": {
+          "requires": ["all_tasks_done"]
+        }
+      }
+    },
+    "diagnose": {
+      "instruction": "Investigate the root cause systematically.\n\n1. Read error messages, stack traces, logs carefully\n2. Trace the code path from symptom to source\n3. Use debugging tools: add logging, breakpoints, print statements\n4. Narrow down: which component, file, function, line?\n5. Document findings with wf_reflect()\n\nTransition to 'hypothesize' when you have a theory.",
+      "transitions": {
+        "hypothesize": {
+          "requires": ["has_reflection"]
+        },
+        "reproduce": {}
+      }
+    },
+    "hypothesize": {
+      "instruction": "Form a specific, testable hypothesis about the root cause.\n\n1. State your hypothesis clearly: 'The bug is caused by X because Y'\n2. Predict what a fix would look like\n3. Consider: could there be multiple causes?\n4. Log your hypothesis with wf_reflect()\n5. Create tasks for the fix: wf_task(action='create', ...)\n\nTransition to 'fix' to implement your hypothesis.",
+      "transitions": {
+        "fix": {
+          "requires": ["has_reflection", "all_tasks_defined"]
+        },
+        "diagnose": {}
+      }
+    },
+    "fix": {
+      "instruction": "Implement the fix based on your hypothesis.\n\n1. Make the minimal change needed to fix the root cause\n2. Don't fix unrelated things in the same change\n3. Add regression tests if possible\n4. Mark fix tasks done as you complete them\n\nTransition to 'verify' when fix is implemented.",
+      "transitions": {
+        "verify": {
+          "requires": ["all_tasks_done"]
+        },
+        "diagnose": {}
+      }
+    },
+    "verify": {
+      "instruction": "Verify the fix actually works.\n\n1. Call wf_verify() FIRST to get the verification plan\n2. MUST check: original reproduction steps — does the bug still occur?\n3. MUST check: full test suite — no regressions?\n4. Work through each pending check from the verification plan\n5. Record each result: wf_gate(criteria='...', passed=..., evidence='...')\n\nIf the fix works, transition to 'done'.\nIf not, go back to 'diagnose' — your hypothesis was wrong.",
+      "transitions": {
+        "done": {
+          "requires": ["gate_passed"]
+        },
+        "diagnose": {},
+        "hypothesize": {}
+      }
+    },
+    "done": {
+      "instruction": "Bug fixed. Summarize: what was the root cause, what was the fix, and what tests now guard against regression.",
+      "transitions": {}
+    }
+  }
+}

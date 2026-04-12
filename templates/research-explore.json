@@ -1,0 +1,57 @@
+{
+  "name": "research-explore",
+  "description": "Survey → Deep Dive → Synthesize → Validate → Report. For tasks that require understanding before building.",
+  "when_to_use": "Technology evaluation, learning new codebases, design decisions, competitive analysis, feasibility studies, documentation",
+  "pattern": "research-explore",
+  "initial_state": "survey",
+  "states": {
+    "survey": {
+      "instruction": "Broad survey of the landscape.\n\n1. Identify all relevant sources: docs, code, papers, articles\n2. Create tasks for each area to investigate: wf_task(action='create', ...)\n3. Do quick reads of each — get the lay of the land\n4. Note key findings, patterns, and open questions\n5. Mark survey tasks done as you complete each\n\nDon't go deep yet — breadth first.\nTransition to 'deep_dive' when survey is complete.",
+      "transitions": {
+        "deep_dive": {
+          "requires": ["all_tasks_done"]
+        }
+      }
+    },
+    "deep_dive": {
+      "instruction": "Go deep on the most important topics.\n\n1. Based on your survey, identify the 2-3 most critical areas\n2. Create focused tasks for each: wf_task(action='create', ...)\n3. Read thoroughly, take detailed notes, try things out\n4. Build understanding by connecting pieces together\n5. Log key insights with wf_reflect()\n\nTransition to 'synthesize' when deep dives are done.",
+      "transitions": {
+        "synthesize": {
+          "requires": ["all_tasks_done"]
+        },
+        "survey": {}
+      }
+    },
+    "synthesize": {
+      "instruction": "Synthesize findings into a coherent picture.\n\n1. What are the key takeaways?\n2. How do the pieces fit together?\n3. What are the trade-offs and recommendations?\n4. Create tasks for writing up the synthesis: wf_task(action='create', ...)\n5. Write the synthesis document/summary\n\nTransition to 'validate' when synthesis is written.",
+      "transitions": {
+        "validate": {
+          "requires": ["all_tasks_done"]
+        },
+        "deep_dive": {}
+      }
+    },
+    "validate": {
+      "instruction": "Validate your synthesis against reality.\n\n1. Call wf_verify() FIRST to get the verification plan\n2. Check key claims — are they supported by evidence?\n3. Try implementing a small proof-of-concept if relevant\n4. Work through each pending verification check\n5. Record each: wf_gate(criteria='...', passed=..., evidence='...')\n\nIf validation passes, transition to 'report'.\nIf not, go back to fill gaps.",
+      "transitions": {
+        "report": {
+          "requires": ["gate_passed"]
+        },
+        "deep_dive": {},
+        "synthesize": {}
+      }
+    },
+    "report": {
+      "instruction": "Produce the final output.\n\n1. Write a clear, actionable report/document\n2. Include: findings, recommendations, trade-offs, next steps\n3. Make it useful for the intended audience\n\nTransition to 'done' when the report is complete.",
+      "transitions": {
+        "done": {
+          "requires": ["all_tasks_done"]
+        }
+      }
+    },
+    "done": {
+      "instruction": "Research complete. Key deliverables have been produced.",
+      "transitions": {}
+    }
+  }
+}

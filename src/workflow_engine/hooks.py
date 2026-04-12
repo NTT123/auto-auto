@@ -167,8 +167,9 @@ def _build_context_payload(engine: WorkflowEngine) -> str:
     lines.append("=== END WORKFLOW CONTEXT ===")
     lines.append("")
     lines.append(
-        "Tip: call wf_status() for the full live dashboard, or wf_next() to see "
-        "what's needed for each transition."
+        "Tip: call wf_resume() for a compact 'where was I' summary, "
+        "wf_status() for the brief live dashboard, or wf_status(mode='full') "
+        "for the full firehose."
     )
 
     return "\n".join(lines)

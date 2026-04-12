@@ -138,6 +138,7 @@ and iterate. No major unknowns that would require a research phase.
                 "permissions": {
                     "allow": [
                         "mcp__auto-auto__wf_status",
+                        "mcp__auto-auto__wf_resume",
                         "mcp__auto-auto__wf_state",
                         "mcp__auto-auto__wf_next",
                         "mcp__auto-auto__wf_transition",
@@ -224,7 +225,7 @@ async def test_scaffold():
 
         settings = json.loads((dest_dir / ".claude" / "settings.json").read_text())
         assert "permissions" in settings
-        assert len(settings["permissions"]["allow"]) == 10
+        assert len(settings["permissions"]["allow"]) == 11
         # Hooks must be present — they're the enforcement layer
         assert "hooks" in settings, "settings.json must have hooks"
         assert "Stop" in settings["hooks"], "Stop hook must be configured"

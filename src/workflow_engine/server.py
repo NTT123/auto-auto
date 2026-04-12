@@ -55,25 +55,77 @@ def _ensure_loaded() -> dict | None:
     return None
 
 
+def _with_next_action(result: dict) -> dict:
+    """Inject a `next_action` hint into a tool response, if computable.
+
+    Called at the end of every wf_* tool that succeeds. The engine computes
+    the hint heuristically from current state + tasks + gates + verify plan.
+    If there's nothing sensible to suggest, the field is omitted.
+    """
+    if "error" in result:
+        return result
+    hint = engine.compute_next_action()
+    if hint is not None:
+        result["next_action"] = hint
+    return result
+
+
 # ── MCP Tools ────────────────────────────────────────────────────
 
 
 @mcp.tool()
-def wf_status() -> dict:
+def wf_status(mode: str = "brief") -> dict:
     """
-    Get the full workflow dashboard.
+    Get a workflow status dashboard.
 
-    Shows: workflow name/goal, current state, instructions for what to do now,
-    tasks in this state, available transitions (and what blocks them),
-    recent reflections, and overall progress.
+    Two modes:
+      - "brief" (default): current state, task/gate/loop counts, transition
+        readiness, verification summary, next_action hint. Small and cheap —
+        this is what you want 90% of the time.
+      - "full": everything in brief PLUS the current state's instruction text,
+        tasks_in_state, recent reflections, and the full loop iterations
+        history. Use this when you need the narrative context, not just
+        "where am I?".
 
-    Call this FIRST when starting work to understand where you are.
-    Call this AFTER each transition to get your new instructions.
+    Call this FIRST when starting work to orient yourself. After that,
+    prefer the brief mode on repeated calls — every response already
+    includes a `next_action` hint, so you rarely need the firehose.
+
+    Args:
+        mode: "brief" or "full" (default: "brief")
     """
     err = _ensure_loaded()
     if err:
         return err
-    return engine.get_full_status()
+    if mode == "full":
+        result = engine.get_full_status()
+    elif mode == "brief":
+        result = engine.get_brief_status()
+    else:
+        return {
+            "error": f"mode must be 'brief' or 'full', got {mode!r}",
+        }
+    return _with_next_action(result)
+
+
+@mcp.tool()
+def wf_resume() -> dict:
+    """
+    Compaction-recovery view: where was I, what do I do next?
+
+    Returns a coherent narrative ("you are in state X, iteration N, focus Y,
+    gates M/K passing, next: ...") plus structured fields. Designed to be
+    called at session start or after context compaction so you can pick up
+    exactly where you left off without reading three separate tools.
+
+    The narrative is short and human-readable — read it and you'll know
+    what to do next. The `next_action` field also gives a concrete call to
+    make.
+    """
+    err = _ensure_loaded()
+    if err:
+        return err
+    return engine.get_resume_summary()
 
 
 @mcp.tool()
@@ -82,7 +134,8 @@ def wf_state() -> dict:
     Get focused details about the current state.
 
     Returns: state name, instruction (what you should do), tasks in this state,
-    and what transitions are available. Lighter than wf_status().
+    and what transitions are available. Includes a `next_action` hint.
+    Lighter than wf_status(mode='full').
     """
     err = _ensure_loaded()
     if err:
@@ -91,12 +144,13 @@ def wf_state() -> dict:
     state_def = engine.get_state_def()
     state_tasks = engine._get_state_tasks(engine.current_state)
 
-    return {
+    result = {
         "state": engine.current_state,
         "instruction": state_def.get("instruction", ""),
         "tasks": [t.to_dict() for t in state_tasks],
         "available_transitions": list(engine.get_available_transitions().keys()),
     }
+    return _with_next_action(result)
 
 
 @mcp.tool()
@@ -105,23 +159,26 @@ def wf_next() -> dict:
     Show what transitions are available and what's required for each.
 
     Use this to understand what you need to do before you can move forward.
+    Includes a `next_action` hint.
     """
     err = _ensure_loaded()
     if err:
         return err
 
     transitions = engine.get_available_transitions()
-    result = {}
+    t_result = {}
     for t_name, t_def in transitions.items():
         allowed, reasons = engine.check_transition_requirements(t_name)
         target_def = engine.get_state_def(t_name)
-        result[t_name] = {
+        t_result[t_name] = {
             "allowed": allowed,
             "blockers": reasons if not allowed else [],
             "requires": t_def.get("requires", []),
             "target_instruction_preview": target_def.get("instruction", "")[:100],
         }
-    return {"current_state": engine.current_state, "transitions": result}
+    return _with_next_action(
+        {"current_state": engine.current_state, "transitions": t_result}
+    )
 
 
 @mcp.tool()
@@ -130,7 +187,9 @@ def wf_transition(to_state: str, reason: str = "") -> dict:
     Transition to a new workflow state.
 
     This will be BLOCKED if preconditions aren't met (e.g., tasks not done,
-    gate not passed). Check wf_next() to see what's needed.
+    gate not passed). Check wf_next() to see what's needed. After a
+    successful transition, the response includes a `next_action` hint for
+    the new state.
 
     Args:
         to_state: The state to transition to (e.g., "execute", "verify", "reflect")
@@ -139,7 +198,7 @@ def wf_transition(to_state: str, reason: str = "") -> dict:
     err = _ensure_loaded()
     if err:
         return err
-    return engine.transition(to_state, reason)
+    return _with_next_action(engine.transition(to_state, reason))
 
 
 @mcp.tool()
@@ -184,7 +243,7 @@ def wf_task(
             state=state or None,
             parent_id=parent_id or None,
         )
-        return {"created": task.to_dict()}
+        return _with_next_action({"created": task.to_dict()})
 
     elif action == "update":
         if not task_id:
@@ -196,7 +255,7 @@ def wf_task(
                 name=name or None,
                 description=description or None,
             )
-            return {"updated": task.to_dict()}
+            return _with_next_action({"updated": task.to_dict()})
         except ValueError as e:
             return {"error": str(e)}
 
@@ -205,7 +264,12 @@ def wf_task(
             return {"error": "task_id is required for 'done'"}
         try:
             task = engine.update_task(task_id=task_id, status="done")
-            return {"updated": task.to_dict(), "message": f"Task '{task.name}' marked done"}
+            return _with_next_action(
+                {
+                    "updated": task.to_dict(),
+                    "message": f"Task '{task.name}' marked done",
+                }
+            )
         except ValueError as e:
             return {"error": str(e)}
 
@@ -214,10 +278,12 @@ def wf_task(
             state=state or None,
             status=status or None,
         )
-        return {
-            "count": len(tasks),
-            "tasks": [t.to_dict() for t in tasks],
-        }
+        return _with_next_action(
+            {
+                "count": len(tasks),
+                "tasks": [t.to_dict() for t in tasks],
+            }
+        )
 
     else:
         return {"error": f"Unknown action '{action}'. Use: create, update, done, list"}
@@ -264,7 +330,7 @@ def wf_verify() -> dict:
     passed_criteria = {g.criteria for g in engine.gates if g.passed}
     passed_checks = [c for c in all_checks if c.get("criteria") in passed_criteria]
 
-    return {
+    return _with_next_action({
         "has_plan": True,
         "strategy": plan.get("strategy", ""),
         "strategy_description": plan.get("description", ""),
@@ -290,11 +356,16 @@ def wf_verify() -> dict:
             "passed=True/False, evidence='...'). Be honest — failed checks help you "
             "find real issues."
         ) if pending else "All checks passed! You can proceed.",
-    }
+    })
 
 
 @mcp.tool()
-def wf_gate(criteria: str, passed: bool, evidence: str) -> dict:
+def wf_gate(
+    criteria: str,
+    passed: bool,
+    evidence: str,
+    iteration: int | None = None,
+) -> dict:
     """
     Record a verification gate check result.
 
@@ -303,23 +374,53 @@ def wf_gate(criteria: str, passed: bool, evidence: str) -> dict:
 
     Be HONEST. The point is to catch issues early, not rubber-stamp progress.
 
+    Iteration tagging: each gate is tagged with an iteration number so you
+    can spot regressions across loop iterations. If you don't pass one, the
+    current loop iteration is inferred automatically (0 for pre-loop / v1).
+    The response includes the full gate history for this criteria, so you
+    can see at a glance whether the result changed across iterations —
+    if iter4 evidence is identical to iter3, that's a clue you re-ran
+    the same thing and nothing actually changed.
+
     Args:
         criteria: What was checked — should match a check from wf_verify()
                   (e.g., "All unit tests pass", "Homepage renders correctly")
         passed: Whether the criteria was met (true/false)
         evidence: Concrete evidence (e.g., "pytest: 42 passed, 0 failed",
                   "Screenshot shows broken layout on mobile")
+        iteration: Optional iteration number. Defaults to the current loop
+                   iteration, or 0 if no loop is active.
     """
     err = _ensure_loaded()
     if err:
         return err
 
-    gate = engine.check_gate(criteria=criteria, passed=passed, evidence=evidence)
+    gate = engine.check_gate(
+        criteria=criteria,
+        passed=passed,
+        evidence=evidence,
+        iteration=iteration,
+    )
     result = gate.to_dict()
 
     # Show remaining checks after recording
     pending = engine.get_pending_checks()
     result["remaining_checks"] = len(pending)
+
+    # Include history for this criteria so regressions are visible at a glance
+    history = engine.get_gate_history_by_criteria(criteria)
+    if len(history) > 1:
+        result["criteria_history"] = [
+            {
+                "iteration": g.iteration,
+                "passed": g.passed,
+                "evidence_preview": (
+                    g.evidence[:120] + "…" if len(g.evidence) > 120 else g.evidence
+                ),
+                "timestamp": g.timestamp,
+            }
+            for g in history
+        ]
 
     if not passed:
         result["hint"] = (
@@ -334,7 +435,7 @@ def wf_gate(criteria: str, passed: bool, evidence: str) -> dict:
     else:
         result["hint"] = "All verification checks passed! You can transition forward."
 
-    return result
+    return _with_next_action(result)
 
 
 @mcp.tool()
@@ -355,10 +456,10 @@ def wf_reflect(content: str) -> dict:
         return err
 
     reflection = engine.add_reflection(content=content)
-    return {
+    return _with_next_action({
         "logged": reflection.to_dict(),
         "total_reflections": len(engine.reflections),
-    }
+    })
 
 
 @mcp.tool()
@@ -443,7 +544,7 @@ def wf_loop(
                 "with your results."
             )
 
-        return {
+        return _with_next_action({
             "started": True,
             "mode": mode,
             "iteration": iteration.iteration,
@@ -451,7 +552,7 @@ def wf_loop(
             "entry_state": engine.loop_entry_state,
             "max_iterations": max_iterations,
             "hint": hint,
-        }
+        })
 
     elif action == "next":
         if not focus:
@@ -495,12 +596,12 @@ def wf_loop(
                 "Work on the improvements, verify, then update."
             )
 
-        return {
+        return _with_next_action({
             "iteration": iteration.iteration,
             "mode": engine.loop_mode,
             "focus": iteration.focus,
             "hint": hint,
-        }
+        })
 
     elif action == "update":
         if not engine.iterations:
@@ -571,7 +672,7 @@ def wf_loop(
                 )
         if remaining_issues:
             result["remaining_issues"] = remaining_issues
-        return result
+        return _with_next_action(result)
 
     elif action == "force_stop":
         result = engine.force_stop_loop(reason=reason)
@@ -587,10 +688,10 @@ def wf_loop(
                 result["hint"] = (
                     f"Loop stopped after {result['total_iterations']} iterations."
                 )
-        return result
+        return _with_next_action(result)
 
     elif action == "status":
-        return engine.get_loop_status()
+        return _with_next_action(engine.get_loop_status())
 
     else:
         return {"error": f"Unknown action '{action}'. Use: start, next, update, status"}

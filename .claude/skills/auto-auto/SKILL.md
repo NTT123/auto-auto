@@ -373,6 +373,7 @@ output inspection and at least one negative test. When you reach the verify stat
   "permissions": {
     "allow": [
       "mcp__auto-auto__wf_status",
+      "mcp__auto-auto__wf_resume",
       "mcp__auto-auto__wf_state",
       "mcp__auto-auto__wf_next",
       "mcp__auto-auto__wf_transition",

@@ -51,12 +51,16 @@ class GateResult:
     passed: bool
     evidence: str
     timestamp: float = field(default_factory=time.time)
+    iteration: int = 0  # Which loop iteration this gate belongs to (0 = pre-loop / v1)
 
     def to_dict(self) -> dict:
         return asdict(self)
 
     @classmethod
     def from_dict(cls, d: dict) -> GateResult:
+        # Backward-compat: older state.json files may lack `iteration`
+        d = d.copy()
+        d.setdefault("iteration", 0)
         return cls(**d)
 
 
@@ -390,12 +394,38 @@ class WorkflowEngine:
                 pending.append(check)
         return pending
 
-    def check_gate(self, criteria: str, passed: bool, evidence: str) -> GateResult:
-        """Record a verification gate check."""
-        gate = GateResult(criteria=criteria, passed=passed, evidence=evidence)
+    def check_gate(
+        self,
+        criteria: str,
+        passed: bool,
+        evidence: str,
+        iteration: int | None = None,
+    ) -> GateResult:
+        """Record a verification gate check.
+
+        If `iteration` is None, it is inferred from the active loop:
+        - an active loop uses its current_iteration
+        - no loop (or no iterations yet) defaults to 0 (pre-loop / v1)
+        """
+        if iteration is None:
+            iteration = self.iterations[-1].iteration if self.iterations else 0
+        gate = GateResult(
+            criteria=criteria,
+            passed=passed,
+            evidence=evidence,
+            iteration=iteration,
+        )
         self.gates.append(gate)
         self._save()
         return gate
+
+    def get_gate_history_by_criteria(self, criteria: str) -> list[GateResult]:
+        """All gate records for a given criteria, oldest→newest.
+
+        Useful for spotting regressions across iterations: the same criteria
+        may have different results in different iterations.
+        """
+        return [g for g in self.gates if g.criteria == criteria]
 
     # ── Loop Management ────────────────────────────────────────
 
@@ -580,6 +610,221 @@ class WorkflowEngine:
             "iterations": summaries,
         }
 
+    # ── Next-action hint ─────────────────────────────────────────
+
+    def _state_requires(self, requirement: str, state_name: str | None = None) -> bool:
+        """True if the named state (default: current) has an outgoing transition
+        that declares `requirement` in its `requires` array.
+
+        Used to classify states as work-like (all_tasks_done) or verify-like
+        (gate_passed) without hardcoding state names — works for any template.
+        """
+        state_def = self.get_state_def(state_name)
+        for t_def in state_def.get("transitions", {}).values():
+            if requirement in t_def.get("requires", []):
+                return True
+        return False
+
+    def compute_next_action(self) -> dict | None:
+        """Heuristically suggest the single most useful next action.
+
+        Returns a dict with at least a `suggestion` string, plus optional
+        `kind`, `tool`, `command`, `then` fields — or None if nothing
+        sensible can be suggested (e.g., workflow not loaded, terminal state).
+
+        The server layer injects this into every wf_* response so the model
+        doesn't have to synthesize "what now?" from three different sources.
+        """
+        if not self.is_loaded:
+            return None
+
+        # Terminal state: nothing to do
+        if self.current_state == "done":
+            return {
+                "kind": "done",
+                "suggestion": "Workflow is in the terminal 'done' state. Nothing more to do.",
+            }
+
+        # 1. In-progress tasks take priority — if you started something, finish it
+        in_progress = [
+            t for t in self.tasks.values() if t.status == TaskStatus.IN_PROGRESS
+        ]
+        if in_progress:
+            t = in_progress[0]
+            return {
+                "kind": "finish_task",
+                "suggestion": (
+                    f"Finish in-progress task [{t.id}] '{t.name}', then mark it done "
+                    f"with wf_task(action='done', task_id='{t.id}')."
+                ),
+                "task_id": t.id,
+                "then": f"wf_task(action='done', task_id='{t.id}')",
+            }
+
+        # 2. Verify-like state with pending checks → run the first pending check
+        if self._state_requires("gate_passed"):
+            pending = self.get_pending_checks()
+            if pending:
+                first = pending[0]
+                criteria = first.get("criteria", "(unnamed)")
+                method = first.get("method", "")
+                command = first.get("command", "")
+                how = first.get("how", "")
+
+                parts = [f"Run pending check: '{criteria}'"]
+                if method:
+                    parts.append(f"(method: {method})")
+                if command:
+                    parts.append(f"via `{command}`")
+                elif how:
+                    parts.append(f"— {how}")
+                parts.append(
+                    f"then record the result with "
+                    f"wf_gate(criteria='{criteria}', passed=..., evidence='...')."
+                )
+
+                return {
+                    "kind": "run_check",
+                    "suggestion": " ".join(parts),
+                    "criteria": criteria,
+                    "method": method,
+                    "command": command,
+                    "then": (
+                        f"wf_gate(criteria={criteria!r}, passed=True|False, "
+                        f"evidence='...')"
+                    ),
+                }
+            # All checks passed in a verify-like state → transition
+            transitions = self.get_available_transitions()
+            ready = [
+                name for name in transitions
+                if self.check_transition_requirements(name)[0]
+            ]
+            if ready:
+                target = ready[0]
+                return {
+                    "kind": "transition",
+                    "suggestion": (
+                        f"All verification checks have passed. Transition to "
+                        f"'{target}' with wf_transition(to_state='{target}', "
+                        f"reason='verification complete')."
+                    ),
+                    "target": target,
+                    "then": f"wf_transition(to_state={target!r})",
+                }
+
+        # 3. Work-like state with pending tasks → pick one up
+        if self._state_requires("all_tasks_done"):
+            pending_tasks = [
+                t for t in self.tasks.values() if t.status == TaskStatus.PENDING
+            ]
+            if pending_tasks:
+                t = pending_tasks[0]
+                return {
+                    "kind": "start_task",
+                    "suggestion": (
+                        f"Pick up task [{t.id}] '{t.name}'. Mark it in-progress "
+                        f"with wf_task(action='update', task_id='{t.id}', "
+                        f"status='in_progress'), do the work, then mark done."
+                    ),
+                    "task_id": t.id,
+                    "then": (
+                        f"wf_task(action='update', task_id={t.id!r}, "
+                        f"status='in_progress')"
+                    ),
+                }
+            # All tasks done → transition out
+            transitions = self.get_available_transitions()
+            ready = [
+                name for name in transitions
+                if self.check_transition_requirements(name)[0]
+            ]
+            if ready:
+                target = ready[0]
+                return {
+                    "kind": "transition",
+                    "suggestion": (
+                        f"All tasks done. Transition to '{target}' with "
+                        f"wf_transition(to_state='{target}', reason='work complete')."
+                    ),
+                    "target": target,
+                    "then": f"wf_transition(to_state={target!r})",
+                }
+
+        # 4. Planning-like state: needs tasks defined before moving on
+        if self._state_requires("all_tasks_defined"):
+            state_tasks = self._get_state_tasks(self.current_state)
+            if not state_tasks:
+                return {
+                    "kind": "define_tasks",
+                    "suggestion": (
+                        "No tasks defined yet. Break the goal into concrete tasks "
+                        "with wf_task(action='create', name='...', description='...')."
+                    ),
+                    "then": "wf_task(action='create', name='...')",
+                }
+            transitions = self.get_available_transitions()
+            ready = [
+                name for name in transitions
+                if self.check_transition_requirements(name)[0]
+            ]
+            if ready:
+                target = ready[0]
+                return {
+                    "kind": "transition",
+                    "suggestion": (
+                        f"Tasks are defined. Transition to '{target}' with "
+                        f"wf_transition(to_state='{target}', reason='plan ready')."
+                    ),
+                    "target": target,
+                    "then": f"wf_transition(to_state={target!r})",
+                }
+
+        # 5. Reflect-like state: needs a reflection before moving on
+        if self._state_requires("has_reflection"):
+            state_reflections = [
+                r for r in self.reflections
+                if r.state == self.current_state
+                and (not self.history or r.timestamp > self.history[-1].timestamp)
+            ]
+            if not state_reflections:
+                return {
+                    "kind": "reflect",
+                    "suggestion": (
+                        "Log a reflection for this state with wf_reflect(content='...'). "
+                        "Capture what you learned and what to do differently."
+                    ),
+                    "then": "wf_reflect(content='...')",
+                }
+
+        # 6. Fallback: is any transition ready?
+        transitions = self.get_available_transitions()
+        ready = [
+            name for name in transitions
+            if self.check_transition_requirements(name)[0]
+        ]
+        if ready:
+            target = ready[0]
+            return {
+                "kind": "transition",
+                "suggestion": (
+                    f"You can transition to '{target}' with "
+                    f"wf_transition(to_state='{target}')."
+                ),
+                "target": target,
+                "then": f"wf_transition(to_state={target!r})",
+            }
+
+        # 7. Nothing obvious — point at wf_state
+        return {
+            "kind": "unknown",
+            "suggestion": (
+                f"Inspect state '{self.current_state}' with wf_state() to see what "
+                f"is required. Check wf_next() for available transitions and blockers."
+            ),
+            "then": "wf_state()",
+        }
+
     # ── Reflections ──────────────────────────────────────────────
 
     def add_reflection(self, content: str) -> Reflection:
@@ -641,6 +886,7 @@ class WorkflowEngine:
 
         return {
             "loaded": True,
+            "mode": "full",
             "workflow": {
                 "name": self.config.get("name", "unnamed"),
                 "goal": self.config.get("goal", ""),
@@ -658,4 +904,192 @@ class WorkflowEngine:
             "gates_passed": len([g for g in self.gates if g.passed]),
             "verification": verification_summary,
             "loop": self.get_loop_status() if self.iterations else None,
+        }
+
+    def _loop_summary(self) -> dict | None:
+        """Compact loop status — just the signals, not the history.
+
+        Used by brief status and resume. Contains only the fields the model
+        actually consumes to decide "where am I in the loop?": active,
+        current iteration, total, converging flag, mode, focus. Excludes the
+        full iterations array and per-iteration summaries.
+        """
+        if not self.iterations:
+            return None
+        full = self.get_loop_status()
+        return {
+            "active": full.get("active", False),
+            "mode": full.get("mode", "bounded"),
+            "current_iteration": full.get("current_iteration", 0),
+            "total_iterations": full.get("total_iterations", 0),
+            "current_focus": full.get("current_focus", ""),
+            "converging": full.get("converging"),
+            "issue_trend": full.get("issue_trend", []),
+            "force_stopped": full.get("force_stopped", False),
+            "max_iterations_reached": full.get("max_iterations_reached", False),
+        }
+
+    def get_brief_status(self) -> dict:
+        """Trimmed workflow status — optimized for "where am I, what's next?".
+
+        Excludes the firehose fields that full status dumps on every call:
+        - full instruction text (pointer to wf_state() instead)
+        - tasks_in_state (full task dicts)
+        - recent_reflections (pointer to wf_status(mode='full'))
+        - loop.iterations (full per-iteration history)
+
+        Keeps the small signals the model needs to orient: current state,
+        task/gate/loop counts, transition readiness, verification summary.
+        """
+        if not self.is_loaded:
+            return {
+                "loaded": False,
+                "message": "No workflow loaded. Run /auto-auto from the auto-auto "
+                "project to design one, or place a config.json in .workflow/",
+            }
+
+        transitions = self.get_available_transitions()
+        transition_status = {}
+        for t_name in transitions:
+            allowed, reasons = self.check_transition_requirements(t_name)
+            transition_status[t_name] = {
+                "allowed": allowed,
+                "blockers": reasons if not allowed else [],
+            }
+
+        all_tasks = list(self.tasks.values())
+        task_summary = {
+            "total": len(all_tasks),
+            "pending": len([t for t in all_tasks if t.status == TaskStatus.PENDING]),
+            "in_progress": len([t for t in all_tasks if t.status == TaskStatus.IN_PROGRESS]),
+            "done": len([t for t in all_tasks if t.status == TaskStatus.DONE]),
+        }
+
+        v_plan = self.get_verification_plan()
+        v_pending = self.get_pending_checks()
+        verification_summary = None
+        if v_plan:
+            verification_summary = {
+                "strategy": v_plan.get("strategy", "unknown"),
+                "total_checks": len(v_plan.get("checks", [])),
+                "pending_checks": len(v_pending),
+                "passed_checks": len(v_plan.get("checks", [])) - len(v_pending),
+            }
+
+        return {
+            "loaded": True,
+            "mode": "brief",
+            "workflow": {
+                "name": self.config.get("name", "unnamed"),
+                "goal": self.config.get("goal", ""),
+            },
+            "current_state": self.current_state,
+            "task_summary": task_summary,
+            "transitions": transition_status,
+            "verification": verification_summary,
+            "loop": self._loop_summary(),
+            "total_gates": len(self.gates),
+            "gates_passed": len([g for g in self.gates if g.passed]),
+            "hint": (
+                "This is the BRIEF dashboard — small and cheap. Call "
+                "wf_status(mode='full') for instruction text, reflections, and "
+                "full loop history, or wf_state() for the current state's "
+                "instruction only."
+            ),
+        }
+
+    def get_resume_summary(self) -> dict:
+        """Compaction-recovery view: 'where was I, what do I do next?'.
+
+        Designed to be called at session start or after context compaction.
+        Returns a single coherent payload with a human-readable narrative
+        plus structured fields — the narrative is what the model reads to
+        orient, the structured fields are what code can inspect.
+        """
+        if not self.is_loaded:
+            return {
+                "loaded": False,
+                "message": "No workflow loaded. Nothing to resume.",
+            }
+
+        loop_summary = self._loop_summary()
+        pending_checks = self.get_pending_checks()
+        in_progress_tasks = [
+            t for t in self.tasks.values() if t.status == TaskStatus.IN_PROGRESS
+        ]
+        pending_tasks = [
+            t for t in self.tasks.values() if t.status == TaskStatus.PENDING
+        ]
+        next_action = self.compute_next_action()
+
+        # Build the narrative
+        lines: list[str] = []
+        lines.append(
+            f"You are in workflow '{self.config.get('name', 'unnamed')}' "
+            f"(goal: {self.config.get('goal', '(no goal)')})."
+        )
+        lines.append(f"Current state: {self.current_state}.")
+
+        if loop_summary:
+            iter_str = (
+                f"iteration {loop_summary['current_iteration']} of "
+                f"{loop_summary['total_iterations']}"
+            )
+            mode_str = loop_summary["mode"]
+            active_str = "active" if loop_summary["active"] else "closed"
+            lines.append(
+                f"Loop: {iter_str} ({mode_str}, {active_str})."
+                + (
+                    f" Focus: {loop_summary['current_focus']}."
+                    if loop_summary.get("current_focus")
+                    else ""
+                )
+            )
+            if loop_summary.get("converging") is False:
+                lines.append(
+                    "⚠️  Not converging — remaining_issues count is not decreasing."
+                )
+
+        # Tasks
+        if in_progress_tasks:
+            t = in_progress_tasks[0]
+            lines.append(f"In-progress task: [{t.id}] {t.name}.")
+        if pending_tasks:
+            lines.append(f"Pending tasks: {len(pending_tasks)}.")
+
+        # Gates
+        v_plan = self.get_verification_plan()
+        if v_plan:
+            total = len(v_plan.get("checks", []))
+            passing = total - len(pending_checks)
+            lines.append(f"Verification: {passing}/{total} checks passing.")
+            if pending_checks:
+                names = [c.get("criteria", "?") for c in pending_checks[:3]]
+                more = (
+                    f" (+{len(pending_checks) - 3} more)"
+                    if len(pending_checks) > 3
+                    else ""
+                )
+                lines.append(f"Pending checks: {', '.join(names)}{more}.")
+
+        # Next action
+        if next_action:
+            lines.append("")
+            lines.append(f"→ Next: {next_action['suggestion']}")
+
+        return {
+            "loaded": True,
+            "narrative": "\n".join(lines),
+            "current_state": self.current_state,
+            "workflow_name": self.config.get("name", "unnamed"),
+            "workflow_goal": self.config.get("goal", ""),
+            "loop": loop_summary,
+            "in_progress_task_count": len(in_progress_tasks),
+            "pending_task_count": len(pending_tasks),
+            "pending_checks": [
+                c.get("criteria", "(unnamed)") for c in pending_checks
+            ],
+            "total_gates": len(self.gates),
+            "gates_passed": len([g for g in self.gates if g.passed]),
+            "next_action": next_action,
         }

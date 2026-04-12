@@ -596,8 +596,8 @@ class WorkflowEngine:
         if not self.is_loaded:
             return {
                 "loaded": False,
-                "message": "No workflow loaded. Use the /workflow skill to design one, "
-                "or place a config.json in .workflow/",
+                "message": "No workflow loaded. Run /auto-auto from the auto-auto "
+                "project to design one, or place a config.json in .workflow/",
             }
 
         state_def = self.get_state_def()

@@ -47,8 +47,9 @@ def _ensure_loaded() -> dict | None:
         return {
             "error": "No workflow loaded",
             "hint": (
-                "Use the /workflow skill to design a workflow for your task, "
-                "or manually create .workflow/config.json with a workflow definition."
+                "Run /auto-auto from the auto-auto project to scaffold a "
+                "workflow for this task, or manually create .workflow/config.json "
+                "with a workflow definition."
             ),
         }
     return None
@@ -600,7 +601,7 @@ def wf_init(config_json: str) -> dict:
     """
     Initialize or reset a workflow from a JSON config string.
 
-    This is an alternative to having the /workflow skill write the config file.
+    This is an alternative to having the /auto-auto skill write the config file.
     You can call this directly to set up a workflow programmatically.
 
     The config must have: name, goal, states (with instructions and transitions),

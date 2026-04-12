@@ -1,13 +1,22 @@
 # Python-generated files
 __pycache__/
+**/__pycache__/
 *.py[oc]
 build/
 dist/
 wheels/
 *.egg-info
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 
 # Virtual environments
-.venv
+.venv/
+venv/
+env/
 
-# Local Claude Code state (per-machine permissions, etc.)
+# Claude Code state:
+#   .claude/settings.json       → COMMITTED: shared project-level settings
+#   .claude/settings.local.json → IGNORED:  per-user / secrets, never committed
+#   .claude/skills/             → COMMITTED: project-level skills (auto-auto)
 .claude/settings.local.json

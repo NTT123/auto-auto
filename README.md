@@ -18,18 +18,22 @@ Auto-Auto:
   1. Researches REST API best practices, your tech stack, etc.
   2. Asks you 3-4 clarification questions
   3. Picks "iterative-refinement" workflow, customizes it
-  4. Creates ~/projects/user-api/ with:
-     - CLAUDE.md (task-specific instructions)
-     - .workflow/config.json (state machine)
-     - .mcp.json (MCP server config)
-     - .claude/settings.json (permissions)
+  4. Designs a verification plan (≥3 checks, ≥2 automated, ≥1 negative test)
+  5. Creates ~/projects/user-api/ with:
+     - CLAUDE.md              (task-specific instructions)
+     - workflow.md            (human-readable plan)
+     - .workflow/config.json  (state machine + verification checks)
+     - .mcp.json              (MCP server wiring)
+     - .claude/settings.json  (MCP permissions + Stop/SessionStart hooks)
 
 You: cd ~/projects/user-api && claude
 
 Claude Code:
   - Connects to Auto-Auto MCP server
+  - SessionStart hook injects workflow context into the first prompt
   - Calls wf_status() → "You're in PLAN state"
-  - Creates tasks, implements them, verifies...
+  - Creates tasks, implements them, runs verification checks
+  - Stop hook blocks exit if there's unfinished work
   - Can't skip verification (transitions are enforced)
   - Reflects after each iteration
 ```
@@ -42,6 +46,12 @@ cd auto-auto
 ./install.sh
 ```
 
+`install.sh` only installs Python dependencies (`uv sync`) and sanity-checks
+that the project-level skill is in place. **It does not write anything under
+`~/.claude`.** The `/auto-auto` skill is a **project-level skill** that lives
+at `./.claude/skills/auto-auto/SKILL.md` inside this repo and is loaded
+automatically whenever you run `claude` from the repo root.
+
 Requirements:
 - Python 3.12+ (via uv)
 - [uv](https://docs.astral.sh/uv/) package manager
@@ -49,15 +59,25 @@ Requirements:
 
 ## Usage
 
-### From any Claude Code session:
+`/auto-auto` is a project-level skill, so to invoke it you **must start
+Claude Code from inside this repository**:
+
+```bash
+cd /path/to/auto-auto
+claude
+```
+
+Then, in that Claude Code session:
 
 ```
 /auto-auto <describe your task>
 ```
 
-The skill will research, ask questions, design a workflow, and scaffold a workspace.
+The skill will research, ask questions, design a workflow, design a
+verification plan, and scaffold a new workspace directory elsewhere on
+your machine.
 
-### Then run the task:
+### Then run the scaffolded task:
 
 ```bash
 cd <generated-workspace>
@@ -65,6 +85,14 @@ claude
 ```
 
 Claude Code will automatically connect to the workflow engine and follow the designed workflow.
+
+> **Why project-level?** Earlier versions of auto-auto symlinked the skill into
+> `~/.claude/skills/auto-auto` so it was callable from any Claude Code session.
+> That turned out to couple the user's home directory to this repo's working
+> tree and was easy to leave in a stale state. The project-level layout keeps
+> the skill co-located with the MCP server it drives, so cloning and running
+> `./install.sh` is the whole setup. If you have a leftover symlink from the
+> old install, `install.sh` will clean it up for you.
 
 ## Workflow Templates
 
@@ -207,9 +235,9 @@ auto-auto/
 │   ├── debug-fix.json
 │   ├── research-explore.json
 │   └── build-ship.json
-├── skill/
-│   ├── auto-auto/SKILL.md      # The /auto-auto architect skill
-│   └── workflow-check/SKILL.md  # Quick status check skill
+├── .claude/
+│   └── skills/
+│       └── auto-auto/SKILL.md  # The /auto-auto architect skill (project-level)
 ├── tests/
 │   ├── test_engine.py           # Engine unit tests
 │   ├── test_mcp_tools.py        # MCP tool integration tests
@@ -218,10 +246,13 @@ auto-auto/
 │   ├── test_infinite_loop.py    # Infinite-mode loop tests
 │   ├── test_verification.py     # Verification plan tests
 │   └── test_full_scaffold.py    # End-to-end scaffold + hook tests
-├── install.sh             # One-command installer
-├── plan.md                # Architecture and build plan
+├── install.sh             # One-command installer (deps + project-level skill check)
 └── pyproject.toml         # Python project config
 ```
+
+The skill lives at `.claude/skills/auto-auto/SKILL.md` — a **project-level**
+skill path. Claude Code picks it up automatically when launched from the repo
+root; there is nothing to install under `~/.claude`.
 
 ## How the State Machine Works
 

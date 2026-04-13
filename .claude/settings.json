@@ -1,5 +1,4 @@
 {
-  "enabledPlugins": {
-    "fakechat@claude-plugins-official": true
-  }
+  "showThinkingSummaries": true,
+  "alwaysThinkingEnabled": true
 }

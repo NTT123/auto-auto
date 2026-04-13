@@ -1,4 +1,8 @@
 {
   "showThinkingSummaries": true,
-  "alwaysThinkingEnabled": true
+  "alwaysThinkingEnabled": true,
+  "model": "opus[1m]",
+  "env": {
+    "CLAUDE_CODE_EFFORT_LEVEL": "max"
+  }
 }

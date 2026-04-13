@@ -64,7 +64,7 @@ Claude Code from inside this repository**:
 
 ```bash
 cd /path/to/auto-auto
-claude
+claude --verbose --effort max --model 'opus[1m]' --dangerously-skip-permissions --system-prompt-file ./system-prompt.txt
 ```
 
 Then, in that Claude Code session:
